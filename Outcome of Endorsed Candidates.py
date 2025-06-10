@@ -27,7 +27,7 @@ if ec is not None:
     ec['FOLDER_TO_TITLE_LOWER'] = ec['FOLDER_TO_TITLE'].fillna('').str.strip().str.lower()
 
     # --- Page Layout and Filters ---
-    st.title("CANDIDATE PIPELINE CONVERSIONS")
+    st.title("Outcome of Endorsed Candidates")
     st.divider()
 
     st.subheader("Filters")
@@ -145,5 +145,5 @@ if ec is not None:
 
     display_table = display_table.astype(str).replace('0', '').replace('0%', '')
     
-    st.markdown("### SOURCING & EARLY STAGE METRICS")
+    st.markdown("### Outcome of Endorsed Candidates")
     st.dataframe(display_table)
