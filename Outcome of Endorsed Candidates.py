@@ -2,131 +2,148 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-# --- Page Configuration ---
-st.set_page_config(
-    layout="wide",
-    page_title="Outcome of Endorsed Candidates"
-)
+# --- Page and Data Configuration ---
+st.set_page_config(layout="wide")
 
-# --- Global Constants ---
-# Define system folders that are not considered 'endorsements'.
-# Using a set of lowercase strings provides faster lookups.
-SYSTEM_FOLDERS = {
-    'inbox', 'unresponsive', 'completed', 'unresponsive talkscore', 'passed mq', 'failed mq',
-    'talkscore retake', 'unresponsive talkscore retake', 'failed talkscore', 'cold leads',
-    'cold leads talkscore', 'cold leads talkscore retake', 'on hold', 'rejected',
-    'talent pool', 'shortlisted', 'hired'
-}
+# Custom colors for styling (if needed later, currently only used for table styling)
+CUSTOM_COLORS = ["#2F76B9", "#3B9790", "#F5BA2E",
+                 "#6A4C93", "#F77F00", "#B4BBBE", "#e6657b",
+                 "#026df5", "#5aede2"]
 
-# --- Data Loading and Caching ---
-@st.cache_data
-def load_and_process_data(file_path):
-    """
-    Loads data from a CSV file, performs initial cleaning and type conversion,
-    and returns a DataFrame. Caching this function improves app performance.
-    """
-    try:
-        df = pd.read_csv(file_path)
-        # Convert date columns to datetime, coercing errors to NaT (Not a Time)
-        df['INVITATIONDT'] = pd.to_datetime(df['INVITATIONDT'], errors='coerce')
-        df['ACTIVITY_CREATED_AT'] = pd.to_datetime(df['ACTIVITY_CREATED_AT'], errors='coerce')
-        df['INSERTEDDATE'] = pd.to_datetime(df['INSERTEDDATE'], errors='coerce')
+# Load the data
+ec = pd.read_csv("SOURCING & EARLY STAGE METRICS.csv")
 
-        # Pre-process folder title columns for efficient and reliable string matching
-        df['FOLDER_LOWER'] = df['FOLDER'].fillna('').str.strip().str.lower()
-        df['FOLDER_TO_TITLE_LOWER'] = df['FOLDER_TO_TITLE'].fillna('').str.strip().str.lower()
-        return df
-    except FileNotFoundError:
-        st.error(f"Error: The file '{file_path}' was not found.")
-        st.info("Please ensure the data file is in the same directory as the script.")
-        return None
 
-# Load the dataset
-ec = load_and_process_data("SOURCING & EARLY STAGE METRICS.csv")
-
-# --- Main Application ---
+# Proceed only if the data is loaded successfully
 if ec is not None:
+    # --- Data Pre-processing ---
+    # Convert date columns to datetime
+    ec['INVITATIONDT'] = pd.to_datetime(ec['INVITATIONDT'], errors='coerce')
+    ec['ACTIVITY_CREATED_AT'] = pd.to_datetime(ec['ACTIVITY_CREATED_AT'], errors='coerce')
+    ec['INSERTEDDATE'] = pd.to_datetime(ec['INSERTEDDATE'], errors='coerce')
+
+    # Pre-process folder title columns for efficient string operations
+    ec['FOLDER_LOWER'] = ec['FOLDER'].fillna('').str.strip().str.lower()
+    ec['FOLDER_TO_TITLE_LOWER'] = ec['FOLDER_TO_TITLE'].fillna('').str.strip().str.lower()
+
+    # --- Page Layout and Filters ---
     st.title("Outcome of Endorsed Candidates")
     st.divider()
 
-    # --- Sidebar Filters ---
-    st.sidebar.header("Filters")
+    st.subheader("Filters")
 
-    # Ensure valid dates are available before showing the date filter
+    # Ensure valid dates before showing the date filter
     valid_invitation_dates = ec['INVITATIONDT'].dropna()
-    if not valid_invitation_dates.empty:
-        min_date = valid_invitation_dates.min().date()
-        max_date = valid_invitation_dates.max().date()
-        default_start_date = max_date - pd.Timedelta(days=60)
-
-        start_date_val, end_date_val = st.sidebar.date_input(
-            "Select Date Range (Invitation Date)",
-            value=[default_start_date, max_date],
-            min_value=min_date,
-            max_value=max_date
-        )
-        start_datetime = pd.to_datetime(start_date_val)
-        end_datetime = pd.to_datetime(end_date_val) + pd.Timedelta(days=1)
-    else:
-        st.sidebar.error("No valid invitation dates found in the data.")
+    if valid_invitation_dates.empty:
+        st.error("No valid INVITATIONDT values available in the data.")
         st.stop()
 
-    with st.sidebar.expander("Filter by Work Location"):
-        unique_worklocations = sorted(ec['CAMPAIGN_SITE'].dropna().unique())
-        selected_worklocations = st.multiselect("Work Location(s)", options=unique_worklocations, default=[])
+    min_date = valid_invitation_dates.min()
+    max_date = valid_invitation_dates.max()
 
-    with st.sidebar.expander("Filter by Campaign Title"):
+    if pd.isna(min_date) or pd.isna(max_date):
+        st.error("Could not determine a valid date range from INVITATIONDT.")
+        st.stop()
+
+    # Compute default start as max_date - 60 days
+    default_start_date = (max_date - pd.Timedelta(days=60)).date()
+
+    start_date_val, end_date_val = st.date_input(
+        "Select Date Range (based on Invitation Date)",
+        value=[default_start_date, max_date.date()],
+        min_value=min_date.date(),
+        max_value=max_date.date()
+    )
+    start_datetime = pd.to_datetime(start_date_val)
+    end_datetime = pd.to_datetime(end_date_val) + pd.Timedelta(days=1)
+
+    with st.expander("Select Work Location(s)"):
+        unique_worklocations = sorted(ec['CAMPAIGN_SITE'].dropna().unique())
+        selected_worklocations = st.multiselect(
+            "Work Location",
+            options=unique_worklocations,
+            default=[]
+        )
+
+    with st.expander("Select Campaign Title(s)"):
         unique_campaigns = sorted(ec['CAMPAIGNTITLE'].dropna().unique())
-        selected_campaigns = st.multiselect("Campaign Title(s)", options=unique_campaigns, default=[])
-    
-    # --- Data Filtering Logic ---
-    filtered_ec = ec[
-        (ec['INVITATIONDT'] >= start_datetime) &
-        (ec['INVITATIONDT'] < end_datetime)
+        selected_campaigns = st.multiselect(
+            "Campaign Title",
+            options=unique_campaigns,
+            default=[]
+        )
+    st.divider()
+
+    # --- Filter Data Based on Selections ---
+    filtered_ec = ec.copy()
+
+    # Apply date filter
+    filtered_ec = filtered_ec[
+        (filtered_ec['INVITATIONDT'] >= start_datetime) &
+        (filtered_ec['INVITATIONDT'] < end_datetime)
     ]
 
+    # Apply optional filters if selections were made
     if selected_worklocations:
         filtered_ec = filtered_ec[filtered_ec['CAMPAIGN_SITE'].isin(selected_worklocations)]
+
     if selected_campaigns:
         filtered_ec = filtered_ec[filtered_ec['CAMPAIGNTITLE'].isin(selected_campaigns)]
 
-    # --- Main Panel Display ---
+    # Stop if filters result in an empty DataFrame
     if filtered_ec.empty:
         st.warning("No data matches the current filter criteria.")
-    else:
-        # --- Calculations on Filtered Data ---
-        hired_counts = filtered_ec[filtered_ec['FOLDER_LOWER'] == 'hired'].groupby(['SOURCE', 'TALKSCORE_CEFR'])['CAMPAIGNINVITATIONID'].nunique()
-        hired_counts = hired_counts.reset_index().rename(columns={'CAMPAIGNINVITATIONID': 'Hired'})
+        st.stop()
+        
+    # --- Calculations on Filtered Data ---
+    
+    # Define system folders and convert to lowercase for matching
+    SYSTEM_FOLDERS = [
+        'inbox', 'unresponsive', 'completed', 'unresponsive talkscore', 'passed mq', 'failed mq',
+        'talkscore retake', 'unresponsive talkscore retake', 'failed talkscore', 'cold leads',
+        'cold leads talkscore', 'cold leads talkscore retake', 'on hold', 'rejected',
+        'talent pool', 'shortlisted', 'hired'
+    ]
 
-        endorsed_counts = filtered_ec[~filtered_ec['FOLDER_TO_TITLE_LOWER'].isin(SYSTEM_FOLDERS)].groupby(['SOURCE', 'TALKSCORE_CEFR'])['CAMPAIGNINVITATIONID'].nunique()
-        endorsed_counts = endorsed_counts.reset_index().rename(columns={'CAMPAIGNINVITATIONID': 'Unique Endorsed'})
+    # Calculate 'Hired' counts using the cleaned 'FOLDER_LOWER' column
+    hired_counts = filtered_ec[filtered_ec['FOLDER_LOWER'] == 'hired'].groupby(['SOURCE', 'TALKSCORE_CEFR'])['CAMPAIGNINVITATIONID'].nunique()
+    hired_counts = hired_counts.reset_index().rename(columns={'CAMPAIGNINVITATIONID': 'Hired'})
 
-        if hired_counts.empty and endorsed_counts.empty:
-            st.info("No Hired or Endorsed data to display for the current filter criteria.")
-        else:
-            merged_df = pd.merge(hired_counts, endorsed_counts, on=['SOURCE', 'TALKSCORE_CEFR'], how='outer')
-            merged_df['Conversion Rate'] = (merged_df['Hired'] / merged_df['Unique Endorsed']) * 100
-            
-            # --- Pivot Table Creation and Formatting ---
-            pivot_table = merged_df.pivot_table(
-                index='TALKSCORE_CEFR',
-                columns='SOURCE',
-                values=['Hired', 'Unique Endorsed', 'Conversion Rate']
-            )
-            
-            pivot_table = pivot_table.swaplevel(0, 1, axis=1).sort_index(axis=1, level=0)
-            
-            metric_order = ['Hired', 'Unique Endorsed', 'Conversion Rate']
-            all_sources = pivot_table.columns.get_level_values(0).unique()
-            pivot_table = pivot_table.reindex(columns=pd.MultiIndex.from_product([all_sources, metric_order]))
+    # Calculate 'Unique Endorsed' counts using the cleaned 'FOLDER_TO_TITLE_LOWER' column
+    endorsed_counts = filtered_ec[~filtered_ec['FOLDER_TO_TITLE_LOWER'].isin(SYSTEM_FOLDERS)].groupby(['SOURCE', 'TALKSCORE_CEFR'])['CAMPAIGNINVITATIONID'].nunique()
+    endorsed_counts = endorsed_counts.reset_index().rename(columns={'CAMPAIGNINVITATIONID': 'Unique Endorsed'})
 
-            display_table = pivot_table.copy()
-            for source in all_sources:
-                display_table[(source, 'Hired')] = display_table[(source, 'Hired')].fillna(0).astype(int)
-                display_table[(source, 'Unique Endorsed')] = display_table[(source, 'Unique Endorsed')].fillna(0).astype(int)
-                display_table[(source, 'Conversion Rate')] = display_table[(source, 'Conversion Rate')].fillna(0).apply(lambda x: f'{x:.0f}%')
+    # Merge hired and endorsed dataframes
+    merged_df = pd.merge(hired_counts, endorsed_counts, on=['SOURCE', 'TALKSCORE_CEFR'], how='outer')
 
-            display_table = display_table.astype(str).replace('0', '').replace('0%', '')
-            
-            st.markdown("### Endorsement & Hiring Metrics by Source and CEFR Score")
-            st.dataframe(display_table, use_container_width=True)
+    # Calculate 'Conversion Rate'
+    merged_df['Conversion Rate'] = np.divide(merged_df['Hired'], merged_df['Unique Endorsed']) * 100
+    
+    # --- Pivot Table Creation and Formatting ---
+
+    if merged_df.empty:
+        st.warning("No Hired or Endorsed data to display for the current filter criteria.")
+        st.stop()
+        
+    pivot_table = merged_df.pivot_table(
+        index='TALKSCORE_CEFR',
+        columns='SOURCE',
+        values=['Hired', 'Unique Endorsed', 'Conversion Rate']
+    )
+    
+    pivot_table = pivot_table.swaplevel(0, 1, axis=1).sort_index(axis=1, level=0)
+    
+    metric_order = ['Hired', 'Unique Endorsed', 'Conversion Rate']
+    all_sources = pivot_table.columns.get_level_values(0).unique()
+    pivot_table = pivot_table.reindex(columns=pd.MultiIndex.from_product([all_sources, metric_order]))
+
+    display_table = pivot_table.copy()
+    for source in all_sources:
+        display_table[(source, 'Hired')] = display_table[(source, 'Hired')].fillna(0).astype(int)
+        display_table[(source, 'Unique Endorsed')] = display_table[(source, 'Unique Endorsed')].fillna(0).astype(int)
+        display_table[(source, 'Conversion Rate')] = display_table[(source, 'Conversion Rate')].fillna(0).apply(lambda x: f'{x:.0f}%')
+
+    display_table = display_table.astype(str).replace('0', '').replace('0%', '')
+    
+    st.markdown("### Outcome of Endorsed Candidates")
+    st.dataframe(display_table)
